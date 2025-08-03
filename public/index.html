@@ -5,6 +5,51 @@
     <meta http-equiv="X-UA-Compatible" content="IE=edge" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Pikachu Release Bot</title>
+    <style>
+      body {
+        background: #FFDE00; /* Pikachu yellow */
+        font-family: 'Comic Sans MS', cursive, sans-serif;
+        color: #3B2F00; /* dark brown for contrast */
+        margin: 0;
+        padding: 2rem;
+        text-align: center;
+      }
+      h1 {
+        font-size: 3rem;
+        margin-bottom: 0.5rem;
+        text-shadow: 2px 2px #FF0000; /* red shadow like Pikachu's cheeks */
+      }
+      code {
+        background: #FFF8B8;
+        padding: 0.2rem 0.5rem;
+        border-radius: 5px;
+        font-weight: bold;
+      }
+      p {
+        font-size: 1.25rem;
+        margin: 1rem auto;
+        max-width: 600px;
+      }
+      /* Add Pikachu cheeks as little circles near the h1 */
+      h1::before, h1::after {
+        content: '';
+        display: inline-block;
+        width: 30px;
+        height: 30px;
+        background: #FF0000;
+        border-radius: 50%;
+        position: relative;
+        top: 10px;
+        margin: 0 15px;
+        box-shadow: 0 0 8px 1px #FF5C5C;
+      }
+      h1::before {
+        transform: translateX(-50px);
+      }
+      h1::after {
+        transform: translateX(50px);
+      }
+    </style>
   </head>
   <body>
     <h1>Pikachu Release Bot</h1>
