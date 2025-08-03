@@ -82,8 +82,8 @@ app.on("push", async (context) => {
     return compareVersionsDesc(aV, bV);
   });
 
-  // If no previous version found, start at 2.0.0.0
-  let baseVersion = [1, 0, 0, 0];
+  // If no previous version found, start at 1.0.0.0
+  let baseVersion = [1, 0, 0, -1];
   if (versionedTags.length > 0) {
     baseVersion = parseVersion(versionedTags[0].version);
   }
