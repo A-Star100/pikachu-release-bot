@@ -76,7 +76,7 @@ app.on("push", async (context) => {
   });
 
   // If no previous version found, start at 2.0.0.0
-  let baseVersion = [2, 0, 0, 0];
+  let baseVersion = [1, 0, 0, 0];
   if (versionedTags.length > 0) {
     baseVersion = parseVersion(versionedTags[0].version);
   }
