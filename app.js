@@ -8,12 +8,10 @@ const releaseKeywords = [
 
 const versionRegex = /^(release|beta)-(\d+\.\d+\.\d+\.\d+)$/;
 
-// Parses "2.0.0.9" -> [2,0,0,9]
 function parseVersion(version) {
   return version.split('.').map(num => parseInt(num, 10));
 }
 
-// Increment version array with rollover, carry over if needed
 function incrementVersion(versionArray) {
   for (let i = versionArray.length - 1; i >= 0; i--) {
     if (versionArray[i] < 9) {
@@ -21,7 +19,6 @@ function incrementVersion(versionArray) {
       break;
     } else {
       versionArray[i] = 0;
-      // If we're at the leftmost digit and it was 9, overflow to 10
       if (i === 0) {
         versionArray[i] = 10;
       }
@@ -30,8 +27,6 @@ function incrementVersion(versionArray) {
   return versionArray;
 }
 
-
-// Compare two version arrays descending
 function compareVersionsDesc(a, b) {
   for (let i = 0; i < a.length; i++) {
     if (a[i] !== b[i]) return b[i] - a[i];
@@ -54,7 +49,7 @@ app.on("push", async (context) => {
 
   const isBeta = matchingCommit.message.toLowerCase().includes("beta");
 
-  // 1. Fetch all tags (for releases and betas)
+  // 1. Fetch all tags only
   const tagsResp = await context.octokit.repos.listTags({
     owner: repository.owner.login || repository.owner.name,
     repo: repository.name,
@@ -62,34 +57,19 @@ app.on("push", async (context) => {
   });
   const tags = tagsResp.data.map(tag => tag.name);
 
-  // 2. Fetch all branches starting with 'beta-' (for beta branches)
-  const branchesResp = await context.octokit.repos.listBranches({
-    owner: repository.owner.login || repository.owner.name,
-    repo: repository.name,
-    per_page: 100,
-  });
-  const betaBranches = branchesResp.data
-    .map(branch => branch.name)
-    .filter(name => name.startsWith('beta-'));
-
-  // Collect all existing versioned refs (tags and branches) that match our patterns
-  const versionedRefs = [];
-
-  for (const tag of tags) {
-    const match = tag.match(versionRegex);
-    if (match) {
-      versionedRefs.push({ type: 'tag', name: tag, version: match[2] });
-    }
-  }
-  for (const branch of betaBranches) {
-    const match = branch.match(versionRegex);
-    if (match) {
-      versionedRefs.push({ type: 'branch', name: branch, version: match[2] });
-    }
-  }
+  // Collect all existing versioned tags that match our pattern
+  const versionedTags = tags
+    .map(tag => {
+      const match = tag.match(versionRegex);
+      if (match) {
+        return { name: tag, type: match[1], version: match[2] };
+      }
+      return null;
+    })
+    .filter(Boolean);
 
   // Sort versions descending
-  versionedRefs.sort((a, b) => {
+  versionedTags.sort((a, b) => {
     const aV = parseVersion(a.version);
     const bV = parseVersion(b.version);
     return compareVersionsDesc(aV, bV);
@@ -97,60 +77,44 @@ app.on("push", async (context) => {
 
   // If no previous version found, start at 2.0.0.0
   let baseVersion = [2, 0, 0, 0];
-  if (versionedRefs.length > 0) {
-    baseVersion = parseVersion(versionedRefs[0].version);
+  if (versionedTags.length > 0) {
+    baseVersion = parseVersion(versionedTags[0].version);
   }
 
   // Calculate new version by incrementing last digit with rollover
   const newVersionArray = incrementVersion(baseVersion);
   const newVersion = newVersionArray.join('.');
 
-  if (isBeta) {
-    // Create a beta branch like beta-x.x.x.x
-    const betaBranchName = `beta-${newVersion}`;
-    const defaultBranchRef = `refs/heads/${repository.default_branch}`;
+  const tagName = isBeta ? `beta-${newVersion}` : `release-${newVersion}`;
 
-    // Get SHA of default branch
-    const refData = await context.octokit.git.getRef({
-      owner: repository.owner.login || repository.owner.name,
-      repo: repository.name,
-      ref: defaultBranchRef.replace('refs/', ''), // e.g., "heads/main"
-    });
-    const baseSha = refData.data.object.sha;
+  // Create annotated tag pointing to the commit SHA
+  await context.octokit.git.createTag({
+    owner: repository.owner.login || repository.owner.name,
+    repo: repository.name,
+    tag: tagName,
+    message: `${isBeta ? 'Beta' : 'Release'} ${newVersion} triggered by commit: ${matchingCommit.message}`,
+    object: matchingCommit.id,
+    type: "commit",
+  });
 
-    // Create new beta branch
-    await context.octokit.git.createRef({
-      owner: repository.owner.login || repository.owner.name,
-      repo: repository.name,
-      ref: `refs/heads/${betaBranchName}`,
-      sha: baseSha,
-    });
+  // Create reference for the new tag
+  await context.octokit.git.createRef({
+    owner: repository.owner.login || repository.owner.name,
+    repo: repository.name,
+    ref: `refs/tags/${tagName}`,
+    sha: matchingCommit.id,
+  });
 
-    // Create draft release for beta
-    await context.octokit.repos.createRelease({
-      owner: repository.owner.login || repository.owner.name,
-      repo: repository.name,
-      tag_name: betaBranchName,
-      name: `Beta ${newVersion}`,
-      body: `Beta release triggered by commit: ${matchingCommit.message}`,
-      target_commitish: betaBranchName,
-      draft: true,
-    });
+  // Create release (draft if beta)
+  await context.octokit.repos.createRelease({
+    owner: repository.owner.login || repository.owner.name,
+    repo: repository.name,
+    tag_name: tagName,
+    name: `${isBeta ? 'Beta' : 'Release'} ${newVersion}`,
+    body: `${isBeta ? 'Beta' : 'Release'} triggered by commit: ${matchingCommit.message}`,
+    target_commitish: matchingCommit.id,
+    draft: isBeta,
+  });
 
-    context.log.info(`Created beta branch '${betaBranchName}' and draft release.`);
-  } else {
-    // Create release tag and release
-    const tagName = `release-${newVersion}`;
-
-    await context.octokit.repos.createRelease({
-      owner: repository.owner.login || repository.owner.name,
-      repo: repository.name,
-      tag_name: tagName,
-      name: `Release ${newVersion}`,
-      body: `Triggered by commit: ${matchingCommit.message}`,
-      target_commitish: matchingCommit.id,
-    });
-
-    context.log.info(`Created release '${tagName}'.`);
-  }
+  context.log.info(`Created ${isBeta ? 'beta' : 'release'} tag and release: '${tagName}'.`);
 });
