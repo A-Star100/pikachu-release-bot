@@ -1,4 +1,4 @@
-# Probot & Vercel example
+# Pikachu Release Bot
 
 This repository is an example of how to deploy the "Hello, World" of probot apps to [Vercel](https://vercel.com).
 
