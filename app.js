@@ -1,3 +1,8 @@
+/**
+ * @param {import('probot').Probot} app
+ */
+
+module.exports = (app) => {
 const releaseKeywords = [
   "thunderbolt",
   "iron tail",
@@ -118,3 +123,4 @@ app.on("push", async (context) => {
 
   context.log.info(`Created ${isBeta ? 'beta' : 'release'} tag and release: '${tagName}'.`);
 });
+};
