@@ -2,6 +2,8 @@
  * @param {import('probot').Probot} app
  */
 
+// pikachu yayyyy
+
 module.exports = (app) => {
 const releaseKeywords = [
   "thunderbolt",
