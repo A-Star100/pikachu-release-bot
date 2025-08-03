@@ -1,219 +1,156 @@
-/**
- * @param {import('probot').Probot} app
- */
+const releaseKeywords = [
+  "thunderbolt",
+  "iron tail",
+  "electro ball",
+  "volt tackle",
+  "quick attack"
+];
 
-// for moderation only, intended to keep people safe from bad talk, especially young people
-const toxicWords = [
-  "stupid",
-  "idiot",
-  "dumb",
-  "shut up",
-  "hate",
-  "kill",
-  "moron",
-  "you suck",
-  "sucks",
-  "sucker",
-  "suckers",
-  "dork"
-    ];
+const versionRegex = /^(release|beta)-(\d+\.\d+\.\d+\.\d+)$/;
+
+// Parses "2.0.0.9" -> [2,0,0,9]
+function parseVersion(version) {
+  return version.split('.').map(num => parseInt(num, 10));
+}
+
+// Increment version array with rollover, carry over if needed
+function incrementVersion(versionArray) {
+  for (let i = versionArray.length - 1; i >= 0; i--) {
+    if (versionArray[i] < 9) {
+      versionArray[i]++;
+      break;
+    } else {
+      versionArray[i] = 0;
+      // If we're at the leftmost digit and it was 9, overflow to 10
+      if (i === 0) {
+        versionArray[i] = 10;
+      }
+    }
+  }
+  return versionArray;
+}
 
 
-module.exports = (app) => {
-  app.log("App loaded!");
+// Compare two version arrays descending
+function compareVersionsDesc(a, b) {
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return b[i] - a[i];
+  }
+  return 0;
+}
 
-  // === ISSUES ===
-  app.on("issues.opened", async (context) => {
-      // Fetch comments on the issue first
-  const { data: comments } = await context.octokit.issues.listComments(context.issue());
-  const hasComments = comments.length > 0;
-    
-    const { title, body } = context.payload.issue;
-  const content = `${title} ${body}`.toLowerCase();
+app.on("push", async (context) => {
+  const { commits, ref, repository } = context.payload;
 
-  // === Toxicity Check ===
-  const toxicRegex = new RegExp(`\\b(${toxicWords.join("|")})\\b`, "i");
-  const toxicMatch = toxicRegex.test(content);
-  if (toxicMatch) {
-    await context.octokit.issues.createComment(
-      context.issue({
-        body: `⚠️ Whoa, slow down there! That kind of talk doesn’t fly in this zone. This issue might break the Code of Conduct — and breaking the rules could get you spin-dashed outta here!`,
-      })
-    );
-    return; // Stop further processing if toxic
+  if (ref !== `refs/heads/${repository.default_branch}`) return;
+
+  // Find a commit that has one of the release keywords
+  const matchingCommit = commits.find(commit =>
+    releaseKeywords.some(keyword =>
+      commit.message.toLowerCase().includes(keyword)
+    )
+  );
+  if (!matchingCommit) return;
+
+  const isBeta = matchingCommit.message.toLowerCase().includes("beta");
+
+  // 1. Fetch all tags (for releases and betas)
+  const tagsResp = await context.octokit.repos.listTags({
+    owner: repository.owner.login || repository.owner.name,
+    repo: repository.name,
+    per_page: 100,
+  });
+  const tags = tagsResp.data.map(tag => tag.name);
+
+  // 2. Fetch all branches starting with 'beta-' (for beta branches)
+  const branchesResp = await context.octokit.repos.listBranches({
+    owner: repository.owner.login || repository.owner.name,
+    repo: repository.name,
+    per_page: 100,
+  });
+  const betaBranches = branchesResp.data
+    .map(branch => branch.name)
+    .filter(name => name.startsWith('beta-'));
+
+  // Collect all existing versioned refs (tags and branches) that match our patterns
+  const versionedRefs = [];
+
+  for (const tag of tags) {
+    const match = tag.match(versionRegex);
+    if (match) {
+      versionedRefs.push({ type: 'tag', name: tag, version: match[2] });
+    }
+  }
+  for (const branch of betaBranches) {
+    const match = branch.match(versionRegex);
+    if (match) {
+      versionedRefs.push({ type: 'branch', name: branch, version: match[2] });
+    }
   }
 
-    const labels = [];
-    const fixedBug = content.includes("fix") && !content.includes("prefix");
-
-    if (!hasComments) {
-    if (content.includes("help")) labels.push("help wanted");
-    if (content.includes("bug") && !fixedBug) labels.push("bug");   
-    }
-
-
-
-    if (labels.length && !fixedBug) {
-      await context.octokit.issues.addLabels(context.issue({ labels }));
-      await context.octokit.issues.createComment(
-        context.issue({ body: `Thanks! I've added the label(s): ${labels.join(", ")}. Gotta go fast!` })
-      );
-    } else if (fixedBug) {
-      await context.octokit.issues.createComment(
-        context.issue({ body: `Thanks for your fix! A maintainer'll review it real fast!` })
-      );
-    } else {
-      await context.octokit.issues.createComment(
-        context.issue({ body: `Hey there 👋! Thanks for opening your issue! Contributions are as good as chilli dogs to me! Gotta go fast!` })
-      );
-    }
+  // Sort versions descending
+  versionedRefs.sort((a, b) => {
+    const aV = parseVersion(a.version);
+    const bV = parseVersion(b.version);
+    return compareVersionsDesc(aV, bV);
   });
 
-  // === ISSUE COMMENTS ===
-  async function ensureLabelExists(context, label) {
-    const { owner, repo } = context.repo();
-    try {
-      await context.octokit.issues.getLabel({ owner, repo, name: label });
-    } catch (error) {
-      if (error.status === 404) {
-        await context.octokit.issues.createLabel({
-          owner,
-          repo,
-          name: label,
-          color: "ededed",
-          description: `Automatically created label: ${label}`,
-        });
-      } else {
-        throw error;
-      }
-    }
+  // If no previous version found, start at 2.0.0.0
+  let baseVersion = [2, 0, 0, 0];
+  if (versionedRefs.length > 0) {
+    baseVersion = parseVersion(versionedRefs[0].version);
   }
 
-app.on("issue_comment.created", async (context) => {
-  const commentBody = context.payload.comment.body.toLowerCase();
-  const issue = context.issue();
+  // Calculate new version by incrementing last digit with rollover
+  const newVersionArray = incrementVersion(baseVersion);
+  const newVersion = newVersionArray.join('.');
 
-  // === Basic Toxicity Detection ===
-  const toxicRegex = new RegExp(`\\b(${toxicWords.join("|")})\\b`, "i");
-  if (toxicRegex.test(commentBody)) {
-    await context.octokit.issues.createComment({
-      ...issue,
-      body: `⚠️ Whoa, slow down there! That kind of talk doesn’t fly in this zone. This issue might break the Code of Conduct — and breaking the rules could get you spin-dashed outta here!`,
+  if (isBeta) {
+    // Create a beta branch like beta-x.x.x.x
+    const betaBranchName = `beta-${newVersion}`;
+    const defaultBranchRef = `refs/heads/${repository.default_branch}`;
+
+    // Get SHA of default branch
+    const refData = await context.octokit.git.getRef({
+      owner: repository.owner.login || repository.owner.name,
+      repo: repository.name,
+      ref: defaultBranchRef.replace('refs/', ''), // e.g., "heads/main"
     });
-    return;
-  }
+    const baseSha = refData.data.object.sha;
 
-  const comment = commentBody;
-
-  // Get current labels on the issue
-  const { data: currentLabels } = await context.octokit.issues.listLabelsOnIssue(issue);
-  const currentLabelNames = currentLabels.map(label => label.name);
-
-  const labelsToAdd = [];
-  const labelsToRemove = [];
-
-  // === Detect "remove [label]" commands first ===
-  const removeRegex = /remove\s+(?:the\s+)?label\s+([\w\s-]+)/gi;
-  let match;
-  while ((match = removeRegex.exec(comment)) !== null) {
-    const labelToRemove = match[1].trim().toLowerCase();
-    const existingLabel = currentLabelNames.find(l => l.toLowerCase() === labelToRemove);
-    if (existingLabel && !labelsToRemove.includes(existingLabel)) {
-      labelsToRemove.push(existingLabel);
-    }
-  }
-
-  // === Add labels only if not already present and not marked for removal ===
-  if (
-    comment.includes("help") &&
-    !currentLabelNames.includes("help wanted") &&
-    !labelsToRemove.includes("help wanted")
-  ) {
-    await ensureLabelExists(context, "help wanted");
-    labelsToAdd.push("help wanted");
-  }
-
-  if (
-    comment.includes("bug") &&
-    !comment.includes("fix") &&
-    !currentLabelNames.includes("bug") &&
-    !labelsToRemove.includes("bug")
-  ) {
-    await ensureLabelExists(context, "bug");
-    labelsToAdd.push("bug");
-  }
-
-  if (
-    comment.includes("fixed") &&
-    !comment.includes("prefix") &&
-    !currentLabelNames.includes("fix") &&
-    !labelsToRemove.includes("fix")
-  ) {
-    await ensureLabelExists(context, "fix");
-    labelsToAdd.push("fix");
-  }
-
-  // === Apply label additions ===
-  if (labelsToAdd.length) {
-    await context.octokit.issues.addLabels({
-      ...issue,
-      labels: labelsToAdd,
+    // Create new beta branch
+    await context.octokit.git.createRef({
+      owner: repository.owner.login || repository.owner.name,
+      repo: repository.name,
+      ref: `refs/heads/${betaBranchName}`,
+      sha: baseSha,
     });
 
-    await context.octokit.issues.createComment({
-      ...issue,
-      body: `Heard ya, dude! I added label(s): ${labelsToAdd.join(", ")}! I'm excited for some chilli dogs!`,
+    // Create draft release for beta
+    await context.octokit.repos.createRelease({
+      owner: repository.owner.login || repository.owner.name,
+      repo: repository.name,
+      tag_name: betaBranchName,
+      name: `Beta ${newVersion}`,
+      body: `Beta release triggered by commit: ${matchingCommit.message}`,
+      target_commitish: betaBranchName,
+      draft: true,
     });
-  }
 
-  // === Apply label removals ===
-  if (labelsToRemove.length) {
-    for (const label of labelsToRemove) {
-      try {
-        await context.octokit.issues.removeLabel({
-          ...issue,
-          name: label,
-        });
-      } catch {
-        // Ignore errors if label was not on the issue
-      }
-    }
+    context.log.info(`Created beta branch '${betaBranchName}' and draft release.`);
+  } else {
+    // Create release tag and release
+    const tagName = `release-${newVersion}`;
 
-    await context.octokit.issues.createComment({
-      ...issue,
-      body: `I removed these labels: ${labelsToRemove.join(", ")}. They've been spindashed outta here, but they can return whenever you want.`,
+    await context.octokit.repos.createRelease({
+      owner: repository.owner.login || repository.owner.name,
+      repo: repository.name,
+      tag_name: tagName,
+      name: `Release ${newVersion}`,
+      body: `Triggered by commit: ${matchingCommit.message}`,
+      target_commitish: matchingCommit.id,
     });
+
+    context.log.info(`Created release '${tagName}'.`);
   }
 });
-
-
-  
-  // === PULL REQUESTS ===
-  app.on("pull_request.opened", async (context) => {
-    const { title, body, labels } = context.payload.pull_request;
-    const content = `${title} ${body}`.toLowerCase();
-
-    if (content.includes("fix") || content.includes("fixed")) {
-      const existingLabels = labels.map(label => label.name);
-      if (!existingLabels.includes("fix")) {
-        await context.octokit.issues.addLabels({
-          owner: context.payload.repository.owner.login,
-          repo: context.payload.repository.name,
-          issue_number: context.payload.pull_request.number,
-          labels: ["fix"],
-        });
-
-        await context.octokit.issues.createComment({
-          owner: context.payload.repository.owner.login,
-          repo: context.payload.repository.name,
-          issue_number: context.payload.pull_request.number,
-          body: "Hey guy! Thanks for the fix! 🚀 I've added the appropriate label. Take care!",
-        });
-      }
-    } else {
-      await context.octokit.issues.createComment(
-        context.issue({ body: `Hey there 👋! Thanks for opening your pull request! Contributions are as good as chilli dogs to me! Gotta go fast!` })
-      );
-    }
-  });
-};
