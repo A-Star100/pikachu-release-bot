@@ -2,7 +2,7 @@
 
 [Website](https://pikachu-release-bot.vercel.app/).
 
-## Create the GiHub App
+## Create the GitHub App
 
 We will first start by running the app localy in order to create the GitHub App and initialize the environment variables.
 
@@ -23,9 +23,9 @@ npm start
 Well done! Your GitHub app has been created but is not running yet. You can close the process with `Ctrl+C` in your terminal.
 Note that a file called `.env` has been created. It contains all the necessary informations to run your app localy or remotely.
 
-## Run localy
+## Run locally
 
-If you want to run your GitHub App localy, you can use
+If you want to run your GitHub App locally, you can use
 ```
 npm start
 ```
